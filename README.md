@@ -100,11 +100,104 @@ flowchart LR
 | **Controladores** | Indirect rotor-flux-oriented control: slip-frequency calculation, discrete d/q current PIs with anti-windup, decoupling and back-EMF feed-forwards, voltage-magnitude field-weakening PI, vector voltage/current limits, angle-delay compensation. |
 | **Motor** | Simscape Electrical asynchronous machine (speed-imposed) fed by controlled voltage sources through inverse Park/Clarke, plus the measurement transforms. |
 | **Transmissão** | Single-speed reduction, efficiency, motor + wheel inertia reflected to the wheel, rear brake torque. |
-| **Pneu** | MFeval (Pacejka MF 6.1) with the Avon `.tir` file; dynamic vertical load. |
+| **Pneu** | MFeval (Pacejka PAC2002) with the Avon `.tir` file; dynamic vertical load. |
 | **Veículo** | Longitudinal equation of motion with rolling resistance, aerodynamic drag, downforce and front brake force. |
+| **Pedal de Freio, Freio** | Brake pedal profile with the brake-override gate, and the rear brake torque applied in the transmission. |
 
 All parameters live in the **Model Workspace** (Model Explorer → `pwtsimplificado_longitudinal` → Model
 Workspace, source *MATLAB Code*), with a comment on every line stating its source.
+
+## Inside the model
+
+The top level chains the subsystems shown in the architecture diagram: the pedal map and brake gate,
+`Controladores`, `Motor`, `Transmissão`, `Pneu` and `Veículo`, with the brake pedal profile and the rear
+brake torque in their own subsystems (`Pedal de Freio`, `Freio`). Every block reads named parameters from
+the Model Workspace, so none of the diagrams below contains car-specific numbers.
+
+### Controller (`Controladores`)
+
+![IRFOC controller](docs/img/diagram_controller.png)
+
+This is the indirect rotor-flux-oriented controller that runs inside the SEVCON Gen5, discretised at 8 kHz.
+
+- **Field weakening (top branch).** The available phase voltage is `V_lim = Vdc/√3 · Modulation_Target`.
+  The applied voltage magnitude `Vmag = √(Vd² + Vq²)` is computed from the previous sample (`1/z`) and
+  low-pass filtered at 50 Hz (`(1 − a)/(z − a)`). Their difference drives an anti-windup PI whose output
+  `Fw` can only reduce the magnetising current: `Idref = Imag + Fw`, with `Fw ≤ 0`.
+- **d-axis current loop.** `Idref − Idm` goes into an anti-windup PI. The decoupling feed-forward
+  `−We·Iqm·σ·Ls` cancels the cross-coupling from the q axis, and the result is the d-axis voltage `Vd_ref`.
+- **q-axis current loop (bottom branch).** The torque request becomes a current request through
+  `Iq = T / (Kt · Idref)`, which follows from `Te = Kt · Id · Iq`. That request is clipped to `±Iq_sat`,
+  where `Iq_sat = √(I_max² − Idref²)` comes from the *Cálculo Saturação Eixo Q* block, so the d axis
+  always keeps priority on the current limit. The q-axis PI and the back-EMF feed-forward produce `Vq_ref`.
+
+### Motor and inverter (`Motor`)
+
+![Induction motor with transforms](docs/img/diagram_motor.png)
+
+- **Actuation path.** `Vd_ref` and `Vq_ref` pass through a one-sample delay (the computation delay of a
+  real controller), then the inverse Park and inverse Clarke transforms, and drive three controlled voltage
+  sources connected to the Simscape asynchronous machine. The PWM itself is not modelled; the inverter is
+  an ideal average voltage source.
+- **Rotor-flux angle.** The slip frequency `Iqref / (Tau_r · Idref)` is added to the electrical rotor
+  speed `Poles · wm` to get the synchronous speed `We`, which is integrated into the flux angle θ. The
+  angle used by the inverse Park transform is advanced by `We · 1.5 · Ts` to compensate the sample and
+  hold delays.
+- **Measurement path.** Phase currents a and b go through Clarke and Park with the same angle to give
+  `Idm` and `Iqm`, the feedback of the current loops. The machine also returns the electromagnetic torque
+  `Te` and the rotor speed `wm`.
+- The machine runs in speed-input mode: its shaft speed is the wheel speed times `gear_ratio`, so all the
+  mechanical dynamics live in the transmission subsystem.
+
+### Transmission (`Transmissão`)
+
+![Transmission](docs/img/diagram_transmission.png)
+
+A single rigid driveline written at the wheel:
+
+```math
+(I_w + I_m \cdot gr^2)\,\dot\omega_{wheel} = T_e \cdot gr \cdot \eta \;-\; F_x R_w \;-\; T_{brake}
+```
+
+The integrator output is the wheel speed. The load torque seen by the motor,
+`(Fx·Rw + T_brake) / gr / η`, is sent back as `Tm` for monitoring.
+
+### Rear tyre (`Pneu`)
+
+![MFeval tyre with dynamic load](docs/img/diagram_tyre.png)
+
+The MFeval block evaluates the Pacejka (PAC2002) model of the Avon tyre, fitted to FSAE Tire Test Consortium data, from wheel speed and vehicle speed.
+Its output `Fx` is per tyre, so it is doubled for the two driven wheels. The vertical load is dynamic:
+
+```math
+F_{z,rear} = F_{z,static} + K_{transf}\,\frac{a_x}{0.1\,s + 1} + K_{downf}\,V_x^2
+```
+
+Longitudinal load transfer comes from the vehicle's acceleration, filtered at 0.1 s to break the algebraic
+loop Fz → Fx → ax → Fz, and the downforce term grows with speed squared. `mu_scale` scales the bench friction
+of the `.tir` file down to track grip.
+
+### Vehicle (`Veículo`)
+
+![Longitudinal vehicle](docs/img/diagram_vehicle.png)
+
+```math
+m\,\dot V = F_{tractive} - \tanh\!\left(\tfrac{V}{0.5}\right) m g C_r - \tfrac12 \rho C_d A_f V^2 - F_{brake,front}
+```
+
+The `tanh` terms smooth rolling resistance and the front brake force around zero speed, so the car does
+not roll backwards when it stops. The front brake force is `Brake_pedal · brake_bias_f · T_brake_max / Rw`;
+the rear share of the brake torque acts on the wheel in the transmission. The acceleration is published
+as `ax` for the tyre load model.
+
+### Parameters (Model Workspace)
+
+![Model Workspace](docs/img/model_workspace.png)
+
+All parameters are defined by a commented MATLAB script stored inside the model (Model Explorer → Model
+Workspace, data source *MATLAB Code*). Derived quantities such as `sigma`, `Tau_r`, `Kt`, the PI gains and
+the current limits are computed in the same script, so changing a motor or battery value updates every
+block that depends on it.
 
 ## Main parameters
 
