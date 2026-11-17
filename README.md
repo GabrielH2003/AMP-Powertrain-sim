@@ -1,21 +1,16 @@
 # AMP-226 Electric Powertrain Model
 
-**Induction motor + IRFOC field-oriented control + 3-DOF vehicle dynamics, regenerative braking and an autonomous lap, in MATLAB/Simulink**
+**Induction motor, IRFOC field-oriented control, 3-DOF vehicle dynamics, regenerative braking and an autonomous lap in MATLAB/Simulink**
 
 > **Branch `develop`.** This branch adds lateral dynamics, regenerative braking, a track-following driver
 > and a 3D replay on top of the longitudinal model. The motor and controller are the same as in
 > [`main`](../../tree/main), where the longitudinal model is validated against the motor datasheet; the
 > lateral parameters here are still estimates waiting for track data.
 
-![MATLAB](https://img.shields.io/badge/MATLAB-R2025a-orange)
-![Simulink](https://img.shields.io/badge/Simulink-Simscape%20Electrical-blue)
-![Status](https://img.shields.io/badge/lateral%20model-in%20development-yellow)
-
 A physics-based simulation of the electric powertrain of **AMP-226**, the Formula SAE electric car of
-**Ampera Racing** (Federal University of Santa Catarina, Brazil).
-It models the whole chain from the driver's inputs to the car's path on track:
-
-> driver (pedals, steering) → torque request and **regen** → **IRFOC current control (SEVCON Gen5)** → **4-pole induction motor** → gearbox → **tyres** → **3-DOF chassis**
+**Ampera Racing** (Federal University of Santa Catarina, Brazil). It covers the whole chain from the
+driver's inputs to the car's path on track: torque request and regen, the field-oriented current control of
+the SEVCON Gen5 inverter, the 4-pole induction motor, the gearbox, the tyres and a 3-DOF chassis.
 
 ![Autonomous lap, chase camera](docs/img/lap_chase.gif)
 
@@ -35,11 +30,9 @@ answers the questions that drive the design and the setup of that car.
 - **Validation with the real car.** Feed logged inputs from track tests into the model and compare the
   outputs, to find which parameter, or which modelling assumption, is wrong.
 
-![Full-throttle acceleration run](docs/img/acceleration_run.png)
-
----
-
 ## Highlights
+
+**Powertrain**
 
 - **Motor parameters identified from the manufacturer's dyno tables.** The original equivalent-circuit
   parameters were physically impossible: with the old torque constant, 110 A could produce at most
@@ -47,7 +40,7 @@ answers the questions that drive the design and the setup of that car.
   load tables (3.3 % RMS residual) gave a consistent set (Lm, Rr, Lσ, Kt, magnetising current).
 - **Current loop designed analytically, not by trial and error.** Discrete PI at 8 kHz with
   Kp = σ·Ls·ωc and Ki = Req·ωc for a 200 Hz bandwidth, back-calculation anti-windup (Kaw = Ki/Kp),
-  decoupling feed-forwards, and **vector** voltage and current saturation with priority to the d axis.
+  decoupling feed-forwards, and **vector** voltage and current limits with priority to the d axis.
 - **Field-weakening bug traced to a sample-time problem.** The voltage-magnitude measurement chain was
   inheriting the solver rate (80 kHz) instead of the controller rate (8 kHz), so it read the
   intra-sample ripple peak (+26 V) and weakened the field far too early. Fixing the sample time
@@ -55,10 +48,8 @@ answers the questions that drive the design and the setup of that car.
 - **Tyre model 11× faster without changing a single result.** MFeval's limit checks call `warning()` at
   every solver step outside the `.tir` range (low speed, hard braking); silencing those two warnings in
   `InitFcn` took heavy-braking segments from 0.21 to 2.4 simulated s per minute.
-- **Dynamic rear-axle load** from longitudinal load transfer and aerodynamic downforce, with a
-  first-order filter that breaks the Fz → Fx → ax → Fz algebraic loop.
 
-**Added in this branch**
+**Vehicle, driver and visualisation (this branch)**
 
 - **3-DOF chassis** (longitudinal, lateral, yaw) with the velocity-coupling terms
   (V̇x = ΣFx/m + Vy·ψ̇, V̇y = ΣFy/m − Vx·ψ̇) and integrated X–Y position.
@@ -69,21 +60,33 @@ answers the questions that drive the design and the setup of that car.
   limited by the smaller of a "coast feel" torque and the battery's charge-current limit, faded out
   below 5 km/h and rate-limited. The driveline efficiency is inverted in regen (wheel torque = motor
   torque × ratio / η), which the first version got wrong by ≈ 21 %.
-- **Friction brakes** with front/rear bias, a friction-ellipse limit on the front axle, and brake
-  override that cuts motor torque.
 - **Pure-pursuit driver** that laps a rule-compliant FSAE autocross track (generated from waypoints with a
   periodic spline), with speed targets from track curvature and lateral-acceleration limits.
 - **3D replay**: the simulated pose is rendered in a VRML scene with cones, track texture and several
   cameras, and written to video. Simulink 3D Animation's classic viewer was removed in R2025a, so the
   pipeline renders off-screen, with a screen-capture fallback when MATLAB runs on the WebGL renderer.
 
-## Validation against the motor datasheet
+## Results
 
-The model is checked against the **load tables** of the datasheet, not the nameplate header (the
-nameplate points are at saturated full flux, outside the linear model's validity range).
+### Autonomous lap
 
-Rows 1–2 are steady-state values computed from the identified parameters; rows 3–5 come from the
-full-throttle simulation below.
+![Lap map](docs/img/lap_map.png)
+
+From a standing start the driver completes the 265 m autocross lap in **24.8 s** (mean 38 km/h, top speed
+60 km/h on the first lap, 73 km/h on the flying second lap). Battery current peaks at 214 A in traction and
+−58 A in regen, inside the 250 A / 60 A limits. Tyre grip is the bench value from the `.tir` file
+(`mu_scale = 1`), so the lap time is optimistic: on track the grip is expected to be about 0.7 of that.
+
+### Full-throttle run
+
+![Full-throttle acceleration run](docs/img/acceleration_run.png)
+
+### Motor and controller against the datasheet
+
+The motor side is checked against the **load tables** of the datasheet, not the nameplate header: the
+nameplate points are at saturated full flux, outside the range where the linear motor model is valid.
+The first two rows are steady-state values computed from the identified parameters; the others come from
+the full-throttle simulation above.
 
 | Check | Target (datasheet) | Model |
 | --- | --- | --- |
@@ -93,9 +96,18 @@ full-throttle simulation below.
 | Slip at 94 N·m | ≈ 8 Hz | 7.83 Hz |
 | Field-weakening knee at full torque | ≈ 2 970 rpm (2 820 rpm at 144 V, scaled to 168 V) | 2 968 rpm |
 
-Vehicle-level predictions (366 kg with driver, full pack): **0–60 km/h in 5.09 s** and the
-**75 m FSAE acceleration event in 6.77 s**. These are still to be confirmed on track — see
-[Validation plan](#validation-plan).
+![Torque–speed envelope](docs/img/torque_speed.png)
+
+Below the knee the model sits on the datasheet's 94 N·m line. In deep field weakening it is 5–8 % above
+the datasheet curve scaled to 168 V, for two known reasons: the motor model is magnetically linear (no
+saturation or iron losses), and the speed scaling from the 144 V dyno test to the 168 V pack is an
+approximation.
+
+### Vehicle
+
+With 366 kg (car and driver) and a full pack, the model predicts **0–60 km/h in 5.09 s** and the
+**75 m FSAE acceleration event in 6.77 s**. These numbers depend on parameters that still have to be
+confirmed on track (rolling resistance, rotating inertias, tyre grip); see the [roadmap](#roadmap).
 
 ### Lateral model: internal consistency checks
 
@@ -109,31 +121,13 @@ Vehicle-level predictions (366 kg with driver, full pack): **0–60 km/h in 5.09
 These confirm the equations are implemented consistently. They do not validate the estimated parameters
 (yaw inertia, brake torque, tyre grip on track), which need the track tests.
 
-### Autonomous lap
-
-![Lap map](docs/img/lap_map.png)
-
-From a standing start the driver completes the 265 m autocross lap in **24.8 s** (mean 38 km/h, top
-speed 60 km/h on the first lap, 73 km/h on the flying second lap). Battery current peaks at 214 A in
-traction and −58 A in regen, inside the 250 A / 60 A limits. Tyre grip is the bench value from the
-`.tir` file (`mu_scale = 1`), so the lap time is optimistic: on track the grip is expected to be about
-0.7 of that.
-
-![Torque–speed envelope](docs/img/torque_speed.png)
-
-Below the knee the model sits on the datasheet's 94 N·m line. In deep field weakening it is 5–8 % above
-the datasheet curve scaled to 168 V. Two known reasons: the motor model is magnetically linear (no
-saturation or iron losses), and the speed scaling from the 144 V dyno test to the 168 V pack is an
-approximation. The battery is modelled as a constant 168 V source, so pack voltage sag under load is
-not yet included.
-
-## Model architecture
+## How the model works
 
 ```mermaid
 flowchart LR
     D[Pure-pursuit driver<br/>or Signal Builder] --> TR[Torque request<br/>brake override + regen]
     D -- steering --> CH
-    TR --> C[IRFOC controller<br/>current PIs · field weakening<br/>vector saturation]
+    TR --> C[IRFOC controller<br/>current PIs · field weakening<br/>vector limits]
     C -- Vd, Vq --> M[Induction motor<br/>Simscape Electrical]
     M -- Id, Iq, Te --> C
     M -- Te --> T[Transmission<br/>4.45 : 1, η = 0.89<br/>reflected inertia]
@@ -145,60 +139,75 @@ flowchart LR
     CH -- pose --> R3[3D replay<br/>video]
 ```
 
+The full model, `pwtsimplificado.slx`, has these subsystems:
+
 | Subsystem | What it does |
 | --- | --- |
-| **Controladores** | Indirect rotor-flux-oriented control: slip-frequency calculation, discrete d/q current PIs with anti-windup, decoupling and back-EMF feed-forwards, voltage-magnitude field-weakening PI, vector voltage/current limits, angle-delay compensation. |
-| **Motor** | Simscape Electrical asynchronous machine (speed-imposed) fed by controlled voltage sources through inverse Park/Clarke, plus the measurement transforms. |
-| **Transmissão** | Single-speed reduction, efficiency, motor + wheel inertia reflected to the wheel, rear brake torque. |
-| **Pneu Traseiro** | MFeval (Pacejka PAC2002) with the Avon `.tir` file; dynamic vertical load, lateral slip from the chassis. |
-| **Pneu Dianteiro** | Analytic Magic Formula fitted to the same `.tir`, load-dependent cornering stiffness and friction, friction ellipse with the front brake force. |
-| **Veículo** | 3-DOF chassis: longitudinal, lateral and yaw equations, rolling resistance, drag, downforce, X–Y integration. |
-| **Direcao** | Steering source selected by `steer_mode`: step, slalom, constant radius (skidpad), logged signal, or the driver. |
-| **Regen** | Lift-off regenerative torque with battery charge limit, low-speed fade and rate limit. |
-| **Rear Brake / Segurança do Pedal** | Friction brake split by bias, brake override of motor torque. |
-| **Monitor DC** | DC-side power, battery current and recovered energy. |
-| **Piloto** | Pure-pursuit steering and speed-target throttle/brake on the track in `data/pista_amp226.mat`. |
-| **Pose 3D** | Packs position, attitude, steering and wheel angles for the 3D replay. |
+| **Controller** | IRFOC current control and field weakening, the same as in `main`. |
+| **Motor and inverter** | Ideal inverter, coordinate transforms, rotor-flux angle and the Simscape induction machine. |
+| **Transmission** | Gear reduction and driveline dynamics; the efficiency is inverted when the motor regenerates. |
+| **Rear tyre** | MFeval with dynamic vertical load and lateral slip from the chassis. |
+| **Front tyre** | Analytic Magic Formula fitted to the same `.tir`, with load-dependent cornering stiffness and a friction ellipse shared with the front brake force. |
+| **Vehicle** | 3-DOF chassis: longitudinal, lateral and yaw equations, rolling resistance, drag, downforce and X–Y integration. |
+| **Steering** | Steering source selected by `steer_mode`: step, slalom, constant radius (skidpad), a logged signal, or the driver. |
+| **Regenerative braking** | Lift-off regen torque with the battery charge limit, low-speed fade and rate limit. |
+| **Rear brake and pedal safety** | Friction brake split by bias, and the brake override that cuts motor torque. |
+| **DC monitor** | DC-side power, battery current and recovered energy. |
+| **Driver** | Pure-pursuit steering and speed-target throttle and brake on the track in `data/pista_amp226.mat`. |
+| **3D pose** | Packs position, attitude, steering and wheel angles for the 3D replay. |
 
-All parameters live in the **Model Workspace** (Model Explorer → `pwtsimplificado` → Model
-Workspace, source *MATLAB Code*), with a comment on every line stating its source.
+### Inside the longitudinal core
 
-## Inside the model
+The figures below are from `pwtsimplificado_longitudinal.slx`. The controller, motor and transmission are
+identical in the full model; there, the tyre and vehicle subsystems are replaced by the two tyre models and
+the 3-DOF chassis listed above.
 
-The figures below show `pwtsimplificado_longitudinal.slx`. The controller, motor and transmission are the
-same in the full model; there, the tyre and vehicle subsystems are replaced by the 3-DOF chassis and the
-two tyre models described above.
+#### Top level
 
-The top level chains the subsystems shown in the architecture diagram: the pedal map and brake gate,
-`Controladores`, `Motor`, `Transmissão`, `Pneu` and `Veículo`, with the brake pedal profile and the rear
-brake torque in their own subsystems (`Pedal de Freio`, `Freio`). Every block reads named parameters from
-the Model Workspace, so none of the diagrams below contains car-specific numbers.
+![Top level of the Simulink model](docs/img/diagram_top.png)
 
-### Controller (`Controladores`)
+The upper row is the signal chain, from left to right:
+
+| Subsystem | What it does |
+| --- | --- |
+| **Driver input** | A Signal Builder with the throttle profile, expressed as a torque request in N·m and passed through a lookup table. |
+| **Brake pedal** | Brake pedal profile, and the brake-override gate (`P_gate`) that cuts motor torque once the pedal passes `brake_cut`. The torque request is then limited to `T_max`. |
+| **Controller** | IRFOC current control and field weakening; turns the torque request into the voltage references `Vd_ref` and `Vq_ref`. |
+| **Motor and inverter** | Inverter as an ideal voltage source, coordinate transforms, rotor-flux angle and the Simscape induction machine. |
+| **Rear brake** | Rear share of the brake torque, applied at the wheel. |
+| **Transmission** | Gear reduction and the rotational dynamics of the driveline. |
+| **Rear tyre** | MFeval tyre model with dynamic vertical load; returns the tractive force. |
+| **Vehicle** | Longitudinal equation of motion; returns the vehicle speed. |
+
+The lower part only logs signals, to scopes and to the workspace (`out.Idm`, `out.Te`, `out.Velocity`, …),
+which is what the post-processing scripts read. Car-specific values come from named parameters in the
+Model Workspace rather than numbers typed into the blocks (the pack voltage constant reads `Bv`).
+
+#### Controller (`Controladores`)
 
 ![IRFOC controller](docs/img/diagram_controller.png)
 
-This is the indirect rotor-flux-oriented controller that runs inside the SEVCON Gen5, discretised at 8 kHz.
+The indirect rotor-flux-oriented controller that runs inside the SEVCON Gen5, discretised at 8 kHz.
 
 - **Field weakening (top branch).** The available phase voltage is `V_lim = Vdc/√3 · Modulation_Target`.
-  The applied voltage magnitude `Vmag = √(Vd² + Vq²)` is computed from the previous sample (`1/z`) and
+  The applied voltage magnitude `Vmag = √(Vd² + Vq²)` is taken from the previous sample (`1/z`) and
   low-pass filtered at 50 Hz (`(1 − a)/(z − a)`). Their difference drives an anti-windup PI whose output
   `Fw` can only reduce the magnetising current: `Idref = Imag + Fw`, with `Fw ≤ 0`.
 - **d-axis current loop.** `Idref − Idm` goes into an anti-windup PI. The decoupling feed-forward
   `−We·Iqm·σ·Ls` cancels the cross-coupling from the q axis, and the result is the d-axis voltage `Vd_ref`.
 - **q-axis current loop (bottom branch).** The torque request becomes a current request through
   `Iq = T / (Kt · Idref)`, which follows from `Te = Kt · Id · Iq`. That request is clipped to `±Iq_sat`,
-  where `Iq_sat = √(I_max² − Idref²)` comes from the *Cálculo Saturação Eixo Q* block, so the d axis
-  always keeps priority on the current limit. The q-axis PI and the back-EMF feed-forward produce `Vq_ref`.
+  where `Iq_sat = √(I_max² − Idref²)`, so the d axis always keeps priority on the current limit. The q-axis
+  PI and the back-EMF feed-forward produce `Vq_ref`.
 
-### Motor and inverter (`Motor`)
+#### Motor and inverter (`Motor`)
 
 ![Induction motor with transforms](docs/img/diagram_motor.png)
 
 - **Actuation path.** `Vd_ref` and `Vq_ref` pass through a one-sample delay (the computation delay of a
   real controller), then the inverse Park and inverse Clarke transforms, and drive three controlled voltage
-  sources connected to the Simscape asynchronous machine. The PWM itself is not modelled; the inverter is
-  an ideal average voltage source.
+  sources connected to the Simscape asynchronous machine. PWM switching is not modelled; the inverter is an
+  ideal average voltage source.
 - **Rotor-flux angle.** The slip frequency `Iqref / (Tau_r · Idref)` is added to the electrical rotor
   speed `Poles · wm` to get the synchronous speed `We`, which is integrated into the flux angle θ. The
   angle used by the inverse Park transform is advanced by `We · 1.5 · Ts` to compensate the sample and
@@ -207,9 +216,9 @@ This is the indirect rotor-flux-oriented controller that runs inside the SEVCON 
   `Idm` and `Iqm`, the feedback of the current loops. The machine also returns the electromagnetic torque
   `Te` and the rotor speed `wm`.
 - The machine runs in speed-input mode: its shaft speed is the wheel speed times `gear_ratio`, so all the
-  mechanical dynamics live in the transmission subsystem.
+  mechanical dynamics live in the transmission.
 
-### Transmission (`Transmissão`)
+#### Transmission (`Transmissão`)
 
 ![Transmission](docs/img/diagram_transmission.png)
 
@@ -222,22 +231,23 @@ A single rigid driveline written at the wheel:
 The integrator output is the wheel speed. The load torque seen by the motor,
 `(Fx·Rw + T_brake) / gr / η`, is sent back as `Tm` for monitoring.
 
-### Rear tyre (`Pneu`)
+#### Rear tyre (`Pneu`)
 
 ![MFeval tyre with dynamic load](docs/img/diagram_tyre.png)
 
-The MFeval block evaluates the Pacejka (PAC2002) model of the Avon tyre, fitted to FSAE Tire Test Consortium data, from wheel speed and vehicle speed.
-Its output `Fx` is per tyre, so it is doubled for the two driven wheels. The vertical load is dynamic:
+The MFeval block evaluates the Pacejka (PAC2002) model of the Avon tyre, fitted to FSAE Tire Test
+Consortium data, from wheel speed and vehicle speed. Its output `Fx` is per tyre, so it is doubled for the
+two driven wheels. The vertical load is dynamic:
 
 ```math
 F_{z,rear} = F_{z,static} + K_{transf}\,\frac{a_x}{0.1\,s + 1} + K_{downf}\,V_x^2
 ```
 
-Longitudinal load transfer comes from the vehicle's acceleration, filtered at 0.1 s to break the algebraic
-loop Fz → Fx → ax → Fz, and the downforce term grows with speed squared. `mu_scale` scales the bench friction
-of the `.tir` file down to track grip.
+Load transfer follows the vehicle's acceleration, filtered at 0.1 s to break the algebraic loop
+Fz → Fx → ax → Fz, and the downforce term grows with speed squared. `mu_scale` scales the bench friction of
+the `.tir` file down to track grip.
 
-### Vehicle (`Veículo`)
+#### Vehicle (`Veículo`)
 
 ![Longitudinal vehicle](docs/img/diagram_vehicle.png)
 
@@ -245,26 +255,24 @@ of the `.tir` file down to track grip.
 m\,\dot V = F_{tractive} - \tanh\!\left(\tfrac{V}{0.5}\right) m g C_r - \tfrac12 \rho C_d A_f V^2 - F_{brake,front}
 ```
 
-The `tanh` terms smooth rolling resistance and the front brake force around zero speed, so the car does
-not roll backwards when it stops. The front brake force is `Brake_pedal · brake_bias_f · T_brake_max / Rw`;
-the rear share of the brake torque acts on the wheel in the transmission. The acceleration is published
-as `ax` for the tyre load model.
+The `tanh` terms smooth rolling resistance and the front brake force around zero speed, so the car does not
+roll backwards when it stops. The front brake force is `Brake_pedal · brake_bias_f · T_brake_max / Rw`; the
+rear share of the brake torque acts on the wheel in the transmission. The acceleration is published as `ax`
+for the tyre load model.
 
-### Parameters (Model Workspace)
+## Parameters
 
 ![Model Workspace](docs/img/model_workspace.png)
 
-All parameters are defined by a commented MATLAB script stored inside the model (Model Explorer → Model
-Workspace, data source *MATLAB Code*). Derived quantities such as `sigma`, `Tau_r`, `Kt`, the PI gains and
-the current limits are computed in the same script, so changing a motor or battery value updates every
-block that depends on it.
-
-## Main parameters
+All parameters are defined by a commented MATLAB script stored inside the model (Model Explorer →
+`pwtsimplificado` → Model Workspace, data source *MATLAB Code*). Each line states where its value comes from.
+Derived quantities such as `sigma`, `Tau_r`, `Kt`, the PI gains and the current limits are computed in the
+same script, so changing a motor or battery value updates every block that depends on it.
 
 | Group | Parameter | Value | Source |
 | --- | --- | --- | --- |
 | Battery | Pack voltage / max DC current | 168 V (full) / 250 A | car spec |
-| Motor | Rated / peak torque | 11 kW / 94 N·m | datasheet |
+| Motor | Rated power / peak torque | 11 kW / 94 N·m | datasheet |
 | Motor | Lm, Rr, Lσs = Lσr | 1.036 mH, 18.6 mΩ, 74.8 µH | identified |
 | Motor | Rs | 16.5 mΩ | datasheet |
 | Motor | Kt (peak currents), Imag | 2.898 mN·m/A², 105 A peak | identified |
@@ -274,20 +282,18 @@ block that depends on it.
 | Driveline | Gear ratio, efficiency, wheel radius | 4.45, 0.89, 0.2605 m | car spec |
 | Vehicle | Mass, CdA, Cr | 366 kg, 1.24 m², 0.02 | car spec |
 | Vehicle | Wheelbase, CG height, rear weight | 1.56 m, 0.295 m, 51.5 % | car spec |
-
 | Chassis | Yaw inertia Iz | 120 kg·m² | estimated |
 | Brakes | Max brake torque, front bias | 1 700 N·m, 70 % | estimated |
 | Regen | Max charge current `Bi_regen` | 60 A | estimated |
 | Tyre | Grip scale on track `mu_scale` | 1.0 (bench); ≈ 0.7 expected on track | to be measured |
 
-Convention: phase currents and voltages are **peak values** (amplitude-invariant Park/Clarke). Datasheet
-RMS values are multiplied by √2.
+Phase currents and voltages are **peak values** (amplitude-invariant Park/Clarke); datasheet RMS values are
+multiplied by √2.
 
-## Adapting the model to a new car
+### Adapting the model to a new car
 
-All car-specific numbers live in one script inside the model (Model Explorer → `pwtsimplificado`
-→ Model Workspace, source *MATLAB Code*). The block diagram only reads those names, so a new car means a new
-parameter set, not a new model. The script is grouped by subsystem:
+The block diagram only reads parameter names, so a new car means a new parameter set, not a new model.
+The script is grouped by subsystem:
 
 | Group | What to update | Typical source |
 | --- | --- | --- |
@@ -303,10 +309,10 @@ parameter set, not a new model. The script is grouped by subsystem:
 | Tyre | the `.tir` file in `data/`, `mu_scale` | tyre test data (TTC or supplier), track tests |
 | Track and driver | `data/pista_amp226.mat`, `pp_*` | `gerar_pista_fsae`, driver tuning |
 
-The script ends with quick checks that print the derived quantities (σ, τr, Kt, controller gains,
-`Kaw·Ts`, `wc·Ts`, maximum reachable torque) next to the datasheet acceptance targets every time the model
-loads, so an inconsistent parameter set shows up before the first simulation. The expected values
-written in those messages are AMP-226's and should be updated with the new car's datasheet.
+Every time the model loads, the script prints the derived quantities (σ, τr, Kt, controller gains,
+`Kaw·Ts`, `wc·Ts`, maximum reachable torque) next to the datasheet acceptance targets, so an inconsistent
+parameter set shows up before the first simulation. The expected values in those messages are AMP-226's and
+should be updated with the new car's datasheet.
 
 ## Getting started
 
@@ -326,9 +332,9 @@ out = sim('pwtsimplificado');      % 34 s: one standing-start lap plus part of a
 plot_volta(out)                    % lap map and traces -> docs/img/lap_map.png
 ```
 
-The full model runs at roughly 0.08× real time (about 7 minutes for the 34 s lap). The default is the
-driver on the track (`steer_mode = 5`, `piloto_on = 1`); set both to their manual values in the Model
-Workspace to use the Signal Builder and the steering test inputs instead.
+The full model runs at roughly 0.08× real time (about 7 minutes for the 34 s lap). By default the driver
+is on (`steer_mode = 5`, `piloto_on = 1`); set them back in the Model Workspace to use the Signal Builder
+and the steering test inputs instead.
 
 **Render the lap in 3D**
 
@@ -341,7 +347,7 @@ fazer_replay3d('lap.mp4')                   % or: simulate, convert the pose and
 `gerar_pista_fsae` regenerates the track from its waypoints and checks it against the FSAE autocross
 rules; `gerar_cena_amp226` rebuilds the VRML scene (car, cones, textures, cameras).
 
-The longitudinal model from `main` is also kept here:
+**Longitudinal model** (same as `main`)
 
 ```matlab
 out = sim('pwtsimplificado_longitudinal');   % 12 s full-throttle run, then braking
@@ -376,19 +382,20 @@ plot_resultados(out)
     └── img/                           Figures and GIFs used in this README
 ```
 
-## Validation plan
+## Roadmap and known limitations
 
-The motor side is validated against the manufacturer's dyno data. The vehicle side still relies on some
-estimated parameters (brake torque, rotating inertias, tyre grip on track). A track test plan replays
-measured inputs (motor speed, inverter torque, brake pressure) into the model layer by layer and compares
-the outputs, so that a mismatch points to one parameter instead of fifteen.
-
-## Known limitations
-
-- Roll and pitch are synthesised from ay and ax by quasi-static gradients for the 3D view; the chassis
+- **Track validation.** The motor side is validated against the manufacturer's dyno data; the vehicle side
+  still relies on estimated parameters (brake torque, rotating inertias, tyre grip on track). The test plan
+  replays measured inputs (motor speed, inverter torque, brake pressure) into the model one layer at a time
+  and compares the outputs, so that a mismatch points to one parameter instead of fifteen.
+- **Battery model.** The pack is a constant 168 V source; voltage sag under load moves the
+  field-weakening knee and is not yet included.
+- **Thermal and inverter limits.** No thermal derating of motor or inverter, and none of the SEVCON's
+  internal ramps.
+- **Lateral parameters.** Yaw inertia, brake torque, the regen charge limit and track grip are estimates
+  until the track tests.
+- **Roll and pitch** are synthesised from ay and ax by quasi-static gradients for the 3D view; the chassis
   has no roll or pitch dynamics.
-- Battery voltage is constant (168 V); no thermal derating of motor or inverter; no internal SEVCON ramps.
-- Yaw inertia, brake torque, regen charge limit and track grip are estimates until the track tests.
 
 ![Autonomous lap, aerial camera](docs/img/lap_aerial.gif)
 
@@ -396,18 +403,19 @@ the outputs, so that a mismatch points to one parameter instead of fifteen.
 
 Modelo em MATLAB/Simulink do powertrain elétrico do **AMP-226**, carro de Formula SAE elétrico da
 **Ampera Racing (UFSC)**: motor de indução Hércules com controle vetorial IRFOC (SEVCON Gen5),
-transmissão, pneu Pacejka via MFeval e dinâmica longitudinal com transferência de carga e downforce.
-A simulação é modular: trocando o conjunto de parâmetros pelos dados do carro do ano seguinte, o mesmo
-modelo serve para decisões de projeto do carro futuro (relação de transmissão, tensão e corrente do
-acumulador, motor, massa, aerodinâmica) e para encontrar ganhos melhores para os controladores do
-inversor antes de passá-los ao SEVCON Gen5.
-Os parâmetros do motor foram identificados por mínimos quadrados a partir das tabelas de dinamômetro
-da folha de dados, os controladores de corrente e de enfraquecimento de campo foram projetados
-analiticamente, e o modelo reproduz os pontos de teste do fabricante (torque, corrente, escorregamento
-e joelho do enfraquecimento de campo). A branch `main` contém a versão longitudinal validada; esta branch,
-`develop`, traz o chassi 3-DOF, regeneração, piloto automático de pista e o replay 3D. Os parâmetros
-laterais (inércia de guinada, freio, aderência em pista) ainda são estimativas que serão conferidas
-nos testes com o carro.
+transmissão, pneu Pacejka via MFeval e dinâmica do veículo. A simulação é modular: trocando o conjunto de
+parâmetros pelos dados do carro do ano seguinte, o mesmo modelo serve para decisões de projeto do carro
+futuro (relação de transmissão, tensão e corrente do acumulador, motor, massa, aerodinâmica) e para
+encontrar ganhos melhores para os controladores do inversor antes de passá-los ao SEVCON Gen5.
+
+Os parâmetros do motor foram identificados por mínimos quadrados a partir das tabelas de dinamômetro da
+folha de dados, os controladores de corrente e de enfraquecimento de campo foram projetados
+analiticamente, e o modelo reproduz os pontos de teste do fabricante (torque, corrente, escorregamento e
+joelho do enfraquecimento de campo).
+
+A branch `main` contém a versão longitudinal validada; esta branch, `develop`, traz o chassi 3-DOF,
+regeneração, piloto automático de pista e o replay 3D. Os parâmetros laterais (inércia de guinada, freio,
+aderência em pista) ainda são estimativas que serão conferidas nos testes com o carro.
 
 ## Author
 
